@@ -1,0 +1,24 @@
+:root {
+  color-scheme: light;
+  --bg: #f8f8f8;
+  --text: #101010;
+  --primary: #0c65d6;
+  --surface: #ffffff;
+  --border: #d8d8d8;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Inter, Arial, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
