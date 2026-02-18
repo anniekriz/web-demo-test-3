@@ -1,0 +1,9 @@
+.body {
+  line-height: 1.7;
+}
+
+.editing {
+  border-radius: 6px;
+  box-shadow: 0 0 0 2px rgba(12, 101, 214, 0.2);
+  outline: none;
+}
