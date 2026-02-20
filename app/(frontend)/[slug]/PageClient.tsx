@@ -20,6 +20,15 @@ type Props = {
 
 type LocalImage = { file: File; previewUrl: string; alt: string }
 
+// helper: pokud je id "123", vrať number 123, jinak vrať původní string
+const coerceIdForApi = (id: string | number | null | undefined) => {
+  if (id === null || id === undefined) return null
+  if (typeof id === 'number') return id
+  const trimmed = String(id).trim()
+  if (/^\d+$/.test(trimmed)) return Number(trimmed)
+  return trimmed
+}
+
 export function PageClient({ initialPage, canEdit }: Props) {
   const [original, setOriginal] = useState(initialPage)
   const [draft, setDraft] = useState(initialPage)
@@ -48,88 +57,195 @@ export function PageClient({ initialPage, canEdit }: Props) {
     return () => window.removeEventListener('beforeunload', onBeforeUnload)
   }, [dirty])
 
-  const ctaHref = draft.heroCta.linkType === 'anchor'
-    ? `#${draft.heroCta.anchorId ?? 'about'}`
-    : draft.heroCta.linkType === 'external'
-      ? draft.heroCta.externalUrl ?? '#'
-      : `/${typeof draft.heroCta.internalPage === 'object' ? draft.heroCta.internalPage.slug : draft.heroCta.internalPage ?? ''}`
+  const internalSlug =
+    typeof draft.heroCta.internalPage === 'object'
+      ? draft.heroCta.internalPage?.slug
+      : draft.heroCta.internalPage
 
-  const heroSrc = heroPending?.previewUrl || `${draft.heroImage.url}?v=${encodeURIComponent(draft.heroImage.updatedAt ?? draft.updatedAt)}`
-  const aboutSrc = aboutPending?.previewUrl || `${draft.aboutImage.url}?v=${encodeURIComponent(draft.aboutImage.updatedAt ?? draft.updatedAt)}`
+  const ctaHref =
+    draft.heroCta.linkType === 'anchor'
+      ? `#${draft.heroCta.anchorId ?? 'about'}`
+      : draft.heroCta.linkType === 'external'
+        ? draft.heroCta.externalUrl ?? '#'
+        : internalSlug
+          ? `/${internalSlug}`
+          : '#'
+
+  const heroSrc =
+    heroPending?.previewUrl ||
+    `${draft.heroImage.url}?v=${encodeURIComponent(
+      draft.heroImage.updatedAt ?? draft.updatedAt,
+    )}`
+
+  const aboutSrc =
+    aboutPending?.previewUrl ||
+    `${draft.aboutImage.url}?v=${encodeURIComponent(
+      draft.aboutImage.updatedAt ?? draft.updatedAt,
+    )}`
 
   const uploadMedia = async (file: File, alt: string) => {
     const form = new FormData()
     form.append('file', file)
     form.append('alt', alt)
 
-    const response = await fetch('/api/media', {
+    const res = await fetch('/api/media', {
       method: 'POST',
       body: form,
       credentials: 'include',
     })
 
-    if (!response.ok) throw new Error('Media upload failed')
-    return response.json()
+    const json = await res.json().catch(() => null)
+
+    if (!res.ok) {
+      console.error('Media upload failed:', res.status, json)
+      throw new Error('Media upload failed')
+    }
+
+    // Payload někdy vrací { doc: {...} }, někdy přímo doc
+    return (json?.doc ?? json) as any
+  }
+
+  // slug -> id (jen pokud linkType internal a internalPage je object)
+  const resolveInternalPageId = async (): Promise<string | number | null> => {
+    if (draft.heroCta.linkType !== 'internal') return null
+    if (!draft.heroCta.internalPage) return null
+
+    // už je to id
+    if (typeof draft.heroCta.internalPage === 'string') return draft.heroCta.internalPage
+
+    // internalPage je object se slugem
+    const slug = draft.heroCta.internalPage.slug
+    if (!slug) return null
+
+    const r = await fetch(
+      `/api/pages?where[slug][equals]=${encodeURIComponent(slug)}&limit=1`,
+      { credentials: 'include' },
+    )
+    const j = await r.json().catch(() => null)
+    const doc = j?.docs?.[0]
+    return doc?.id ?? null
   }
 
   const onSave = async () => {
-    if (!draft.heroHeadline || !draft.heroSubheadline || !draft.heroCta.text || !draft.aboutHeading || !lexicalToPlainText(draft.aboutBody)) {
-      alert('Please fill all required text fields.')
-      return
+    try {
+      if (!draft.id) {
+        console.error('Missing draft.id', draft)
+        alert('Save failed: missing page id')
+        return
+      }
+
+      if (
+        !draft.heroHeadline ||
+        !draft.heroSubheadline ||
+        !draft.heroCta.text ||
+        !draft.aboutHeading ||
+        !lexicalToPlainText(draft.aboutBody)
+      ) {
+        alert('Please fill all required text fields.')
+        return
+      }
+
+      if ((heroPending && !heroPending.alt.trim()) || (aboutPending && !aboutPending.alt.trim())) {
+        alert('Alt text is required for newly selected images.')
+        return
+      }
+
+      let heroImage = draft.heroImage
+      let aboutImage = draft.aboutImage
+
+      // 1) Upload (pokud se měnil obrázek)
+      if (heroPending) {
+        const media = await uploadMedia(heroPending.file, heroPending.alt)
+        console.log('Uploaded media (hero):', media)
+
+        // id může být number -> uložíme do state jako string (kvůli PageData), ale do API budeme posílat number
+        heroImage = {
+          id: String(media.id),
+          alt: media.alt,
+          url: media.url,
+          updatedAt: media.updatedAt,
+        }
+      }
+
+      if (aboutPending) {
+        const media = await uploadMedia(aboutPending.file, aboutPending.alt)
+        console.log('Uploaded media (about):', media)
+
+        aboutImage = {
+          id: String(media.id),
+          alt: media.alt,
+          url: media.url,
+          updatedAt: media.updatedAt,
+        }
+      }
+
+      // 2) Internal page: nikdy neposílat object -> vždy id nebo null
+      const internalPageId = await resolveInternalPageId()
+
+      const heroCtaForApi = {
+        ...draft.heroCta,
+        internalPage:
+          draft.heroCta.linkType === 'internal'
+            ? internalPageId
+            : null,
+      }
+
+      // 3) Co posíláme do API pro upload fields: číslo, pokud to jde
+      const heroImageIdForApi = coerceIdForApi(heroImage.id)
+      const aboutImageIdForApi = coerceIdForApi(aboutImage.id)
+
+      // Pokud by byly null, Payload může vyhodit invalid – tak radši logni
+      console.log('IDs for API:', {
+        pageId: draft.id,
+        heroImageIdForApi,
+        aboutImageIdForApi,
+        internalPageId,
+      })
+
+      const res = await fetch(`/api/pages/${draft.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          heroHeadline: draft.heroHeadline,
+          heroSubheadline: draft.heroSubheadline,
+          heroCta: heroCtaForApi,
+          heroImage: heroImageIdForApi,
+          aboutHeading: draft.aboutHeading,
+          aboutBody: draft.aboutBody,
+          aboutImage: aboutImageIdForApi,
+        }),
+      })
+
+      const json = await res.json().catch(() => null)
+      console.log('PATCH /api/pages response:', JSON.stringify(json, null, 2))
+
+      if (!res.ok) {
+        console.error('Save failed:', res.status, json)
+        alert('Save failed.')
+        return
+      }
+
+      const doc = (json?.doc ?? json)
+
+      const updated: PageData = {
+        ...draft,
+        heroImage,
+        aboutImage,
+        updatedAt: doc?.updatedAt ?? draft.updatedAt,
+      }
+
+      setOriginal(updated)
+      setDraft(updated)
+
+      if (heroPending) URL.revokeObjectURL(heroPending.previewUrl)
+      if (aboutPending) URL.revokeObjectURL(aboutPending.previewUrl)
+      setHeroPending(null)
+      setAboutPending(null)
+    } catch (e) {
+      console.error(e)
+      alert(`Save crashed: ${e instanceof Error ? e.message : String(e)}`)
     }
-
-    if ((heroPending && !heroPending.alt.trim()) || (aboutPending && !aboutPending.alt.trim())) {
-      alert('Alt text is required for newly selected images.')
-      return
-    }
-
-    let heroImage = draft.heroImage
-    let aboutImage = draft.aboutImage
-
-    if (heroPending) {
-      const media = await uploadMedia(heroPending.file, heroPending.alt)
-      heroImage = { id: String(media.doc.id), alt: media.doc.alt, url: media.doc.url, updatedAt: media.doc.updatedAt }
-    }
-
-    if (aboutPending) {
-      const media = await uploadMedia(aboutPending.file, aboutPending.alt)
-      aboutImage = { id: String(media.doc.id), alt: media.doc.alt, url: media.doc.url, updatedAt: media.doc.updatedAt }
-    }
-
-    const response = await fetch(`/api/pages/${draft.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({
-        heroHeadline: draft.heroHeadline,
-        heroSubheadline: draft.heroSubheadline,
-        heroCta: draft.heroCta,
-        heroImage: heroImage.id,
-        aboutHeading: draft.aboutHeading,
-        aboutBody: draft.aboutBody,
-        aboutImage: aboutImage.id,
-      }),
-    })
-
-    if (!response.ok) {
-      alert('Save failed.')
-      return
-    }
-
-    const payload = await response.json()
-    const updated: PageData = {
-      ...draft,
-      heroImage,
-      aboutImage,
-      updatedAt: payload.doc.updatedAt,
-    }
-
-    setOriginal(updated)
-    setDraft(updated)
-    if (heroPending) URL.revokeObjectURL(heroPending.previewUrl)
-    if (aboutPending) URL.revokeObjectURL(aboutPending.previewUrl)
-    setHeroPending(null)
-    setAboutPending(null)
   }
 
   const exitEditing = () => {
@@ -137,7 +253,6 @@ export function PageClient({ initialPage, canEdit }: Props) {
       setShowDiscard(true)
       return
     }
-
     setEditing(false)
   }
 
@@ -153,12 +268,31 @@ export function PageClient({ initialPage, canEdit }: Props) {
 
   return (
     <div className={styles.page}>
-      <Header canEdit={canEdit} isEditing={editing} dirty={dirty} onEdit={() => setEditing(true)} onSave={onSave} onExit={exitEditing} />
+      <Header
+        canEdit={canEdit}
+        isEditing={editing}
+        dirty={dirty}
+        onEdit={() => setEditing(true)}
+        onSave={onSave}
+        onExit={exitEditing}
+      />
+
       <main className={styles.main}>
         <section className={heroStyles.section}>
           <div className={heroStyles.copy}>
-            <EditableText tag="h1" value={draft.heroHeadline} editing={editing} onChange={(next) => setDraft((prev) => ({ ...prev, heroHeadline: next }))} />
-            <EditableText tag="p" value={draft.heroSubheadline} editing={editing} onChange={(next) => setDraft((prev) => ({ ...prev, heroSubheadline: next }))} />
+            <EditableText
+              tag="h1"
+              value={draft.heroHeadline}
+              editing={editing}
+              onChange={(next) => setDraft((prev) => ({ ...prev, heroHeadline: next }))}
+            />
+            <EditableText
+              tag="p"
+              value={draft.heroSubheadline}
+              editing={editing}
+              onChange={(next) => setDraft((prev) => ({ ...prev, heroSubheadline: next }))}
+            />
+
             <Link
               className={`${heroStyles.cta} ${editing ? styles.linkFallback : ''}`}
               href={ctaHref}
@@ -168,7 +302,9 @@ export function PageClient({ initialPage, canEdit }: Props) {
                 tag="span"
                 value={draft.heroCta.text}
                 editing={editing}
-                onChange={(next) => setDraft((prev) => ({ ...prev, heroCta: { ...prev.heroCta, text: next } }))}
+                onChange={(next) =>
+                  setDraft((prev) => ({ ...prev, heroCta: { ...prev.heroCta, text: next } }))
+                }
               />
             </Link>
           </div>
@@ -192,8 +328,18 @@ export function PageClient({ initialPage, canEdit }: Props) {
 
         <section id="about" className={aboutStyles.section}>
           <div>
-            <EditableText tag="h2" value={draft.aboutHeading} editing={editing} onChange={(next) => setDraft((prev) => ({ ...prev, aboutHeading: next }))} />
-            <EditableRichText value={draft.aboutBody} editing={editing} onChange={(next) => setDraft((prev) => ({ ...prev, aboutBody: next }))} />
+            <EditableText
+              tag="h2"
+              value={draft.aboutHeading}
+              editing={editing}
+              onChange={(next) => setDraft((prev) => ({ ...prev, aboutHeading: next }))}
+            />
+
+            <EditableRichText
+              value={draft.aboutBody}
+              editing={editing}
+              onChange={(next) => setDraft((prev) => ({ ...prev, aboutBody: next }))}
+            />
           </div>
 
           <EditableImage
@@ -212,6 +358,7 @@ export function PageClient({ initialPage, canEdit }: Props) {
             </div>
           </EditableImage>
         </section>
+
         <footer className={styles.footer}>© {new Date().getFullYear()} Neo World Weby</footer>
       </main>
 
