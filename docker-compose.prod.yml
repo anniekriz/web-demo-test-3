@@ -17,17 +17,18 @@ services:
   app:
     build: .
     restart: unless-stopped
-    env_file:
-      - .env
+    env_file: .env
     depends_on:
       postgres:
         condition: service_healthy
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3010:3000"
     volumes:
+      # aby se uploady neztratily po rebuild/restartu
       - media_data:/app/media
       - media_data:/app/public/media
 
 volumes:
   postgres_data:
   media_data:
+
