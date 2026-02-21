@@ -57,10 +57,19 @@ export const Pages: CollectionConfig = {
         { name: 'newTab', type: 'checkbox' },
       ],
       validate: (value) => {
-        if (!value) return 'CTA is required'
-        if (value.linkType === 'internal' && !value.internalPage) return 'Internal page is required'
-        if (value.linkType === 'external' && !value.externalUrl) return 'External URL is required'
-        if (value.linkType === 'anchor' && !value.anchorId) return 'Anchor ID is required'
+        if (!value || typeof value !== 'object') return 'CTA is required'
+
+        const cta = value as {
+          linkType?: 'internal' | 'external' | 'anchor'
+          internalPage?: unknown
+          externalUrl?: string
+          anchorId?: string
+        }
+
+        if (cta.linkType === 'internal' && !cta.internalPage) return 'Internal page is required'
+        if (cta.linkType === 'external' && !cta.externalUrl) return 'External URL is required'
+        if (cta.linkType === 'anchor' && !cta.anchorId) return 'Anchor ID is required'
+
         return true
       },
     },
