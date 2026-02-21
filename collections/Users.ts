@@ -1,5 +1,10 @@
-import type { CollectionConfig } from 'payload'
+import type { CollectionConfig, PayloadRequest } from 'payload'
 import { isAdmin } from '@/lib/access'
+
+const canAccessUsersAdmin = async ({ req }: { req: PayloadRequest }): Promise<boolean> => {
+  const result = await Promise.resolve(isAdmin({ req } as any))
+  return result === true
+}
 
 export const Users: CollectionConfig = {
   slug: 'users',
@@ -12,7 +17,7 @@ export const Users: CollectionConfig = {
     create: isAdmin,
     update: isAdmin,
     delete: isAdmin,
-    admin: isAdmin,
+    admin: canAccessUsersAdmin, 
   },
   fields: [
     {
