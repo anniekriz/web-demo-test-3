@@ -86,7 +86,7 @@ export function PageClient({ initialPage, canEdit }: Props) {
   const uploadMedia = async (file: File, alt: string) => {
     const form = new FormData()
     form.append('file', file)
-    form.append('alt', alt)
+    form.append('_payload', JSON.stringify({ alt }))
 
     const res = await fetch('/api/media', {
       method: 'POST',
