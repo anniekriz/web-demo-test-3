@@ -8,6 +8,7 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NODE_ENV=production
+RUN npm run generate:importmap
 RUN npm run build
 
 FROM node:20-bookworm-slim AS run

@@ -1,32 +1,32 @@
+import type { Metadata } from 'next'
+
 import configPromise from '@payload-config'
 import { RootPage, generatePageMetadata } from '@payloadcms/next/views'
 
-type NextPageProps = {
-  params: { segments?: string[] }
-  searchParams: Record<string, string | string[] | undefined>
+import { importMap } from '../importMap.js'
+
+type PageArgs = {
+  params: Promise<{ segments?: string[] }>
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>
 }
 
-export default function Page({ params, searchParams }: NextPageProps) {
-  return (
-    <RootPage
-      config={configPromise}
-      params={Promise.resolve({ segments: params.segments ?? [] })}
-      searchParams={Promise.resolve(searchParams)}
-    />
-  )
+export const generateMetadata = ({ params, searchParams }: PageArgs): Promise<Metadata> => {
+  const normalizedParams = params.then(({ segments }) => ({ segments: segments ?? [] }))
+
+  return generatePageMetadata({
+    config: configPromise,
+    params: normalizedParams,
+    searchParams,
+  })
 }
 
-// Varianta A (většinou stačí)
-export const generateMetadata = generatePageMetadata({ config: configPromise })
+export default function Page({ params, searchParams }: PageArgs) {
+  const normalizedParams = params.then(({ segments }) => ({ segments: segments ?? [] }))
 
-/**
- * Kdyby Next pořád remcal na generateMetadata, dej místo varianty A tuhle variantu B:
- *
- * export async function generateMetadata({ params, searchParams }: NextPageProps) {
- *   const fn = generatePageMetadata({ config: configPromise })
- *   return fn({
- *     params: Promise.resolve({ segments: params.segments ?? [] }),
- *     searchParams: Promise.resolve(searchParams),
- *   } as any)
- * }
- */
+  return RootPage({
+    config: configPromise,
+    importMap,
+    params: normalizedParams,
+    searchParams,
+  })
+}
