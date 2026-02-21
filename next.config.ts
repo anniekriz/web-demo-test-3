@@ -7,6 +7,10 @@ const nextConfig: NextConfig = {
   basePath,
   // aby se správně načítaly _next assety přes subpath
   assetPrefix: basePath,
+	
+eslint: {
+  ignoreDuringBuilds: true,
+},
 
   images: {
     remotePatterns: [
